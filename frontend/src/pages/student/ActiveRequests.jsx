@@ -36,6 +36,8 @@ const ActiveRequests = () => {
                 id: req._id,
                 subject: req.subject,
                 type: req.examType,
+                // raw examDate preserved for calculations
+                examDate: req.examDate,
                 date: new Date(req.examDate).toLocaleDateString('en-US', {
                     month: 'short',
                     day: 'numeric',
@@ -305,8 +307,29 @@ const RequestCard = ({ request, onDelete, deleteConfirm, onConfirmDelete, onCanc
         "Volunteer Cancelled": "bg-red-100 text-red-700",
     };
 
+    // force update every hour so countdown remains accurate
+    const [, forceUpdate] = useState(0);
+    useEffect(() => {
+        const timer = setInterval(() => forceUpdate(n => n + 1), 60 * 60 * 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    // compute urgency based on examDate and existing flag
+    const now = new Date();
+    let daysRemaining = null;
+    if (request.examDate) {
+        daysRemaining = Math.ceil((new Date(request.examDate) - now) / (1000 * 60 * 60 * 24));
+    }
+    const urgentFlag = (daysRemaining !== null && daysRemaining >= 0 && daysRemaining <= 3) || (request.urgent && daysRemaining !== null && daysRemaining >= 0);
+    const remainingTextClass = daysRemaining !== null && daysRemaining <= 3 ? 'text-red-600 font-semibold' : 'text-gray-700';
+
     return (
-        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden hover:shadow-md transition">
+        <div className={`${urgentFlag ? 'border-2 border-red-300 bg-red-50' : 'border border-gray-200'} bg-white rounded-2xl shadow-sm overflow-hidden hover:shadow-md transition`}> 
+            {urgentFlag && (
+                <div className="px-5 pt-4">
+                    <span className="text-red-700 font-bold text-sm">⚠️ URGENT REQUEST</span>
+                </div>
+            )}
             {/* Header */}
             <div className="flex items-center justify-between p-5 border-b bg-gray-50">
                 <div className="flex items-center gap-3">
@@ -351,6 +374,12 @@ const RequestCard = ({ request, onDelete, deleteConfirm, onConfirmDelete, onCanc
             </div>
 
             {/* Body */}
+            {request.examDate && (
+                <div className="p-5 bg-gray-50 mb-4">
+                    <p className={`${remainingTextClass} text-sm`}>Days Remaining: {daysRemaining >= 0 ? `${daysRemaining} ${daysRemaining === 1 ? 'Day' : 'Days'}` : 'Past Exam Date'}</p>
+                    <p className={`${remainingTextClass} text-sm mt-1`}>Please Accept or Reject before the deadline.</p>
+                </div>
+            )}
             <div className="p-5">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                     <InfoItem icon={<FaCalendarAlt />} label="Date" value={request.date} />

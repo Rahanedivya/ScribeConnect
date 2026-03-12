@@ -70,6 +70,14 @@ exports.sendLastMinuteRequest = async (req, res) => {
         const { volunteerId, subject, examType, examDate, examTime, duration, requirements } = req.body;
         const studentId = req.user._id;
 
+        // basic validation
+        if (!volunteerId || !subject || !examType || !examDate || !examTime) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields for last minute request'
+            });
+        }
+
         // Verify student exists
         const student = await Student.findOne({ userId: studentId });
         if (!student) {
@@ -79,22 +87,36 @@ exports.sendLastMinuteRequest = async (req, res) => {
             });
         }
 
-        //  Verify volunteer exists and is available
+        //  Verify volunteer exists
         const volunteer = await Volunteer.findById(volunteerId);
-        if (!volunteer || !volunteer.lastMinuteAvailable) {
+        if (!volunteer) {
             return res.status(404).json({
                 success: false,
-                message: 'Volunteer not available for last minute requests'
+                message: 'Selected volunteer not found'
+            });
+        }
+
+        // If volunteer is not marked available we won't block the request, just log it
+        if (!volunteer.lastMinuteAvailable) {
+            console.warn(`Volunteer ${volunteerId} is not currently marked available for last-minute; still creating request.`);
+        }
+
+        // attempt to parse examDate
+        const parsedDate = new Date(examDate);
+        if (isNaN(parsedDate.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid exam date format'
             });
         }
 
         // Create a new last minute request
         const newRequest = new Request({
             studentId: student._id,
-            volunteerId: null,  // Initially no volunteer assigned
+            volunteerId: null,  // leave null until volunteer accepts
             subject,
             examType,
-            examDate: new Date(examDate),
+            examDate: parsedDate,
             examTime,
             duration,
             requirements,
@@ -104,9 +126,6 @@ exports.sendLastMinuteRequest = async (req, res) => {
 
         await newRequest.save();
 
-        // Notify the volunteer (in a real system)
-        // For now, we'll just send it to the pending list
-
         res.status(201).json({
             success: true,
             message: 'Last minute request sent successfully',
@@ -114,9 +133,10 @@ exports.sendLastMinuteRequest = async (req, res) => {
         });
     } catch (error) {
         console.error('Error sending last minute request:', error);
+        // forward internal error message if available
         res.status(500).json({
             success: false,
-            message: 'Failed to send last minute request'
+            message: error.message || 'Failed to send last minute request'
         });
     }
 };

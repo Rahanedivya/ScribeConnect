@@ -16,6 +16,13 @@ const IncomingRequests = () => {
     useEffect(() => {
         fetchIncomingRequests();
         fetchUrgentRequests();
+
+        // refresh periodically so urgency/daysRemaining stays accurate
+        const timer = setInterval(() => {
+            fetchIncomingRequests();
+            fetchUrgentRequests();
+        }, 60 * 60 * 1000); // every hour
+        return () => clearInterval(timer);
     }, []);
 
     const fetchIncomingRequests = async () => {
@@ -165,10 +172,29 @@ const RequestCard = ({ request, onAccept, onDecline, isUrgent = false }) => {
     const [showTermsModal, setShowTermsModal] = useState(false);
     const [termsAgreed, setTermsAgreed] = useState(false);
 
+    // force component re-render every hour so daysRemaining updates
+    const [, forceUpdate] = useState(0);
+    useEffect(() => {
+        const timer = setInterval(() => forceUpdate(n => n + 1), 60 * 60 * 1000);
+        return () => clearInterval(timer);
+    }, []);
+
     const handleAcceptClick = () => {
         setShowTermsModal(true);
         setTermsAgreed(false);
     };
+
+    // compute urgency/time data every render so it stays up to date
+    const now = new Date();
+    const examDateObj = new Date(request.examDate);
+    const diffMs = examDateObj - now;
+    const daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    const isUrgentByDate = daysRemaining >= 0 && daysRemaining <= 3;
+    const urgentFlag = (isUrgent && daysRemaining >= 0) || isUrgentByDate;
+
+    const remainingTextClass = daysRemaining <= 3 ? 'text-red-600 font-semibold' : 'text-gray-700';
+
+    // used later in render
 
     const handleConfirmAccept = () => {
         if (termsAgreed) {
@@ -185,7 +211,13 @@ const RequestCard = ({ request, onAccept, onDecline, isUrgent = false }) => {
 
     return (
         <> 
-        <div className={`${isUrgent ? 'bg-red-50 border-2 border-red-300' : 'bg-white border border-gray-200'} rounded-2xl shadow-sm p-6`}>
+        <div className={`${urgentFlag ? 'bg-red-50 border-2 border-red-300' : 'bg-white border border-gray-200'} rounded-2xl shadow-sm p-6`}>
+            {/* urgent banner */}
+            {urgentFlag && (
+                <div className="mb-2">
+                    <span className="text-red-700 font-bold text-sm">⚠️ URGENT REQUEST</span>
+                </div>
+            )}
             <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3 flex-1">
                     {request.studentId?.profilePicture ? (
@@ -229,6 +261,14 @@ const RequestCard = ({ request, onAccept, onDecline, isUrgent = false }) => {
                 <InfoItem icon={<FaClock />} label="Time" value={request.examTime} />
                 <InfoItem icon={<FaClock />} label="Duration" value={request.duration} />
             </div>
+
+            {/* time remaining info */}
+            {request.examDate && (
+                <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                    <p className={`text-sm ${remainingTextClass}`}>Days Remaining: {daysRemaining >= 0 ? `${daysRemaining} ${daysRemaining === 1 ? 'Day' : 'Days'}` : 'Past Exam Date'}</p>
+                    <p className={`text-sm mt-1 ${remainingTextClass}`}>Please Accept or Reject before the deadline.</p>
+                </div>
+            )}
 
             <div className="mb-4 p-3 bg-gray-50 rounded-lg">
                 <p className="text-sm text-gray-600"><strong>Requirements:</strong> {request.requirements}</p>

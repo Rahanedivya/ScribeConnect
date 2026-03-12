@@ -11,10 +11,19 @@ const Volunteer = require('../models/Volunteer');
 router.post('/', protect, async (req, res, next) => {
     try {
         const student = await Student.findOne({ userId: req.user._id });
-        const request = await Request.create({
+        const payload = {
             studentId: student._id,
             ...req.body
-        });
+        };
+        if (payload.examDate) {
+            const now = new Date();
+            const exam = new Date(payload.examDate);
+            const days = Math.ceil((exam - now) / (1000 * 60 * 60 * 24));
+            if (days <= 3) {
+                payload.urgent = true;
+            }
+        }
+        const request = await Request.create(payload);
         res.status(201).json(request);
     } catch (error) {
         next(error);
@@ -26,9 +35,18 @@ router.post('/', protect, async (req, res, next) => {
 // @access  Private
 router.get('/:id', protect, async (req, res, next) => {
     try {
-        const request = await Request.findById(req.params.id)
+        let request = await Request.findById(req.params.id)
             .populate('studentId', 'fullName university phone')
             .populate('volunteerId', 'fullName phone rating');
+        if (request && request.examDate) {
+            const now = new Date();
+            const diffDays = Math.ceil((new Date(request.examDate) - now) / (1000 * 60 * 60 * 24));
+            const obj = request.toObject();
+            obj.daysRemaining = diffDays;
+            if (diffDays <= 3 && diffDays >= 0) obj.urgent = true;
+            if (diffDays < 0) obj.urgent = false;
+            request = obj;
+        }
         res.json(request);
     } catch (error) {
         next(error);

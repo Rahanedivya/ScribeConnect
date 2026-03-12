@@ -39,10 +39,11 @@ const lastMinuteService = {
                     ...requestData
                 })
             });
+            const data = await response.json();
             if (!response.ok) {
-                throw new Error('Failed to send last minute request');
+                throw new Error(data.message || 'Failed to send last minute request');
             }
-            return await response.json();
+            return data;
         } catch (error) {
             console.error('Error sending last minute request:', error);
             throw error;

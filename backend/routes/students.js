@@ -84,10 +84,21 @@ router.post('/requests', protect, authorize('student'), async (req, res, next) =
             return res.status(404).json({ message: 'Student profile not found' });
         }
 
-        const request = await Request.create({
+        // determine if the new request should be marked urgent based on exam date
+        const payload = {
             studentId: student._id,
             ...req.body
-        });
+        };
+        if (payload.examDate) {
+            const now = new Date();
+            const exam = new Date(payload.examDate);
+            const days = Math.ceil((exam - now) / (1000 * 60 * 60 * 24));
+            if (days <= 3) {
+                payload.urgent = true;
+            }
+        }
+
+        const request = await Request.create(payload);
 
         // Populate the created request
         const populatedRequest = await Request.findById(request._id)
@@ -110,9 +121,21 @@ router.get('/requests', protect, authorize('student'), async (req, res, next) =>
             return res.status(404).json({ message: 'Student profile not found' });
         }
 
-        const requests = await Request.find({ studentId: student._id })
+        let requests = await Request.find({ studentId: student._id })
             .populate('volunteerId', 'fullName phone rating')
             .sort('-createdAt');
+
+        const now = new Date();
+        requests = requests.map(r => {
+            const obj = r.toObject();
+            if (obj.examDate) {
+                const diffDays = Math.ceil((new Date(obj.examDate) - now) / (1000 * 60 * 60 * 24));
+                obj.daysRemaining = diffDays;
+                if (diffDays <= 3 && diffDays >= 0) obj.urgent = true;
+                if (diffDays < 0) obj.urgent = false;
+            }
+            return obj;
+        });
 
         res.json(requests);
     } catch (error) {

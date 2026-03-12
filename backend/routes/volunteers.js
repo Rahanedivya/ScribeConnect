@@ -98,12 +98,34 @@ router.get('/incoming', protect, authorize('volunteer'), async (req, res, next) 
             .populate('studentId', 'fullName university disabilityType specificNeeds profilePicture course currentYear city state')
             .sort('-createdAt');
 
+        // enhance each request: compute daysRemaining and automatically flag urgent if near
+        const now = new Date();
+        requests = await Promise.all(requests.map(async request => {
+            const reqObj = request.toObject();
+
+            const exam = new Date(reqObj.examDate);
+            const diffDays = Math.ceil((exam - now) / (1000 * 60 * 60 * 24));
+            reqObj.daysRemaining = diffDays;
+            // if exam date has passed we clear urgent status
+            if (diffDays < 0 && reqObj.urgent) {
+                // optional: clear urgent in db
+                await Request.findByIdAndUpdate(reqObj._id, { urgent: false });
+                reqObj.urgent = false;
+            }
+            // if exam is within 3 days mark urgent
+            if (diffDays >= 0 && diffDays <= 3 && !reqObj.urgent) {
+                await Request.findByIdAndUpdate(reqObj._id, { urgent: true });
+                reqObj.urgent = true;
+            }
+
+            return reqObj;
+        }));
+
         // 3. Education/Subject Matching (Soft Filter / AI Matching Score)
         // We add a 'matchScore' to prioritize relevant requests
         // Keywords: Check if request subject or student course matches volunteer subjects
 
         requests = requests.map(request => {
-            const reqObj = request.toObject();
             let score = 0;
             const reasons = [];
 
@@ -140,7 +162,7 @@ router.get('/incoming', protect, authorize('volunteer'), async (req, res, next) 
                 }
             }
 
-            return { ...reqObj, matchScore: score, matchReasons: reasons };
+            return { ...request, matchScore: score, matchReasons: reasons };
         });
 
         // Sort by Match Score
@@ -210,12 +232,25 @@ router.post('/decline/:requestId', protect, authorize('volunteer'), async (req, 
 router.get('/active', protect, authorize('volunteer'), async (req, res, next) => {
     try {
         const volunteer = await Volunteer.findOne({ userId: req.user._id });
-        const assignments = await Request.find({
+        let assignments = await Request.find({
             volunteerId: volunteer._id,
             status: { $in: ['accepted', 'in-progress', 'declined_by_volunteer'] }
         })
             .populate('studentId', 'fullName university phone profilePicture')
             .sort('examDate');
+
+        const now = new Date();
+        assignments = assignments.map(a => {
+            const obj = a.toObject();
+            if (obj.examDate) {
+                const diffDays = Math.ceil((new Date(obj.examDate) - now) / (1000 * 60 * 60 * 24));
+                obj.daysRemaining = diffDays;
+                if (diffDays <= 3 && diffDays >= 0) obj.urgent = true;
+                if (diffDays < 0) obj.urgent = false;
+            }
+            return obj;
+        });
+
         res.json(assignments);
     } catch (error) {
         next(error);
@@ -336,14 +371,42 @@ router.post('/toggle-last-minute', protect, authorize('volunteer'), async (req, 
 // @access  Private (Volunteer)
 router.get('/urgent-requests', protect, authorize('volunteer'), async (req, res, next) => {
     try {
-        // Get urgent requests that haven't been assigned yet
-        const urgentRequests = await Request.find({
-            urgent: true,
-            volunteerId: { $exists: false }
+        const now = new Date();
+        const threeDaysFromNow = new Date(now);
+        threeDaysFromNow.setDate(now.getDate() + 3);
+
+        // Get urgent or soon-to-be-urgent requests that haven't been assigned yet
+        let urgentRequests = await Request.find({
+            volunteerId: { $exists: false },
+            status: 'pending',
+            $or: [
+                { urgent: true },
+                { examDate: { $gte: now, $lte: threeDaysFromNow } }
+            ]
         })
             .populate('studentId', 'name email subject location availableTime')
             .sort({ createdAt: -1 })
             .lean();
+
+        // augment daysRemaining and normalize urgent flag
+        urgentRequests = urgentRequests.map(r => {
+            const exam = new Date(r.examDate);
+            const diffDays = Math.ceil((exam - now) / (1000 * 60 * 60 * 24));
+            r.daysRemaining = diffDays;
+            if (diffDays < 0) {
+                r.urgent = false;
+            } else if (diffDays <= 3) {
+                r.urgent = true;
+            }
+            return r;
+        });
+
+        // optionally persist urgent flag for those newly marked
+        urgentRequests.forEach(r => {
+            if (r.urgent) {
+                Request.findByIdAndUpdate(r._id, { urgent: true }).exec();
+            }
+        });
 
         res.json({
             count: urgentRequests.length,

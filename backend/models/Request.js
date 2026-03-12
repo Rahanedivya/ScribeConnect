@@ -96,4 +96,37 @@ requestSchema.index({ status: 1, examDate: 1 });
 requestSchema.index({ studentId: 1, status: 1 });
 requestSchema.index({ volunteerId: 1, status: 1 });
 
+// virtual field for days remaining until examDate
+requestSchema.virtual('daysRemaining').get(function() {
+    if (!this.examDate) return null;
+    const now = new Date();
+    const diffMs = this.examDate - now;
+    // round up so that anything less than 24h shows as 1 day
+    return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+});
+
+// automatically mark request urgent if exam is within 3 days at save time
+requestSchema.pre('save', async function() {
+    if (this.examDate) {
+        const now = new Date();
+        const diffDays = Math.ceil((this.examDate - now) / (1000 * 60 * 60 * 24));
+        if (diffDays <= 3) {
+            this.urgent = true;
+        }
+    }
+});
+
+// also handle updates where examDate may change
+requestSchema.pre('findOneAndUpdate', async function() {
+    const update = this.getUpdate();
+    if (update && update.examDate) {
+        const now = new Date();
+        const exam = new Date(update.examDate);
+        const diffDays = Math.ceil((exam - now) / (1000 * 60 * 60 * 24));
+        if (diffDays <= 3) {
+            update.urgent = true;
+        }
+    }
+});
+
 module.exports = mongoose.model('Request', requestSchema);
