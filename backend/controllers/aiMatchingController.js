@@ -46,7 +46,8 @@ exports.getSmartVolunteerMatches = async (req, res) => {
         const rankedVolunteers = await AIMatchingEngine.getSmartMatches(
             requestData,
             student.city,
-            student.disabilityType
+            student.disabilityType,
+            student // Pass student object for eligibility validation
         );
 
         res.status(200).json({
@@ -103,7 +104,8 @@ exports.getTopRecommendations = async (req, res) => {
             requestData,
             student.city,
             student.disabilityType,
-            parseInt(limit) || 5
+            parseInt(limit) || 5,
+            student // Pass student object for eligibility validation
         );
 
         res.status(200).json({
@@ -155,7 +157,8 @@ exports.autoAllocateVolunteer = async (req, res) => {
                 duration: request.duration
             },
             student.city,
-            student.disabilityType
+            student.disabilityType,
+            student // Pass student object for eligibility validation
         );
 
         if (!bestMatch) {

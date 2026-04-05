@@ -4,18 +4,27 @@ const { protect, authorize } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const Volunteer = require('../models/Volunteer');
 const Request = require('../models/Request');
+const ScribeEligibilityValidator = require('../utils/scribeEligibilityValidator');
 
 // @desc    Get all available volunteers (for students to browse)
 // @route   GET /api/v1/volunteers
 // @access  Private (Student)
 router.get('/', protect, authorize('student'), async (req, res, next) => {
     try {
+        // Get current student info for eligibility checking
+        const Student = require('../models/Student');
+        const student = await Student.findOne({ userId: req.user._id });
+
+        if (!student) {
+            return res.status(404).json({ message: 'Student profile not found' });
+        }
+
         const volunteers = await Volunteer.find()
             .populate('userId', 'email')
-            .select('fullName phone subjects languages availability experience rating totalRatings userId volunteerType hourlyRate city state profilePicture')
+            .select('fullName phone subjects languages availability experience rating totalRatings userId volunteerType hourlyRate city state profilePicture educationLevel subjectExpertise availabilityStatus')
             .sort('-rating');
 
-        // Add completed assignments count for each volunteer
+        // Add completed assignments count and eligibility status for each volunteer
         const volunteersWithStats = await Promise.all(
             volunteers.map(async (volunteer) => {
                 const completedCount = await Request.countDocuments({
@@ -23,9 +32,19 @@ router.get('/', protect, authorize('student'), async (req, res, next) => {
                     status: 'completed'
                 });
 
+                // Check eligibility for scribe requests (generic check without specific subject)
+                const eligibilityStatus = ScribeEligibilityValidator.getEligibilityStatus(
+                    volunteer,
+                    student,
+                    '' // Empty subject for general availability check
+                );
+
                 return {
                     ...volunteer.toObject(),
-                    completedAssignments: completedCount
+                    completedAssignments: completedCount,
+                    eligibilityStatus: eligibilityStatus.status,
+                    eligibilityMessage: eligibilityStatus.message,
+                    canSendRequest: eligibilityStatus.canSendRequest
                 };
             })
         );
@@ -81,7 +100,8 @@ router.get('/incoming', protect, authorize('volunteer'), async (req, res, next) 
         const studentsInLocation = await Student.find({
             city: { $regex: new RegExp('^' + volunteer.city + '$', 'i') }, // Case-insensitive match
             state: { $regex: new RegExp('^' + volunteer.state + '$', 'i') }
-        }).select('_id');
+        })
+            .select('_id');
 
         const studentIds = studentsInLocation.map(s => s._id);
 
@@ -89,86 +109,110 @@ router.get('/incoming', protect, authorize('volunteer'), async (req, res, next) 
             return res.json([]); // No students in this location
         }
 
-        // 2. Fetch Pending Requests from these Students
-        let requests = await Request.find({
-            status: 'pending',
-            volunteerId: null,
+        // 2. Fetch ALL Requests from these Students (both active and past)
+        let allRequests = await Request.find({
+            status: { $in: ['pending', 'accepted', 'rejected'] },
             studentId: { $in: studentIds }
         })
-            .populate('studentId', 'fullName university disabilityType specificNeeds profilePicture course currentYear city state')
+            .populate('studentId', 'fullName university disabilityType specificNeeds profilePicture course currentYear city state educationLevel')
+            .populate('volunteerId', 'fullName')
             .sort('-createdAt');
+
+        // 3. Categorize requests based on exam date
+        const activeRequests = [];
+        const pastRequests = [];
 
         // enhance each request: compute daysRemaining and automatically flag urgent if near
         const now = new Date();
-        requests = await Promise.all(requests.map(async request => {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Start of today
+
+        allRequests = await Promise.all(allRequests.map(async request => {
             const reqObj = request.toObject();
 
             const exam = new Date(reqObj.examDate);
+            const examDateOnly = new Date(exam.getFullYear(), exam.getMonth(), exam.getDate()); // Start of exam day
             const diffDays = Math.ceil((exam - now) / (1000 * 60 * 60 * 24));
             reqObj.daysRemaining = diffDays;
+
+            // Determine if this is a past request
+            const isPastRequest = examDateOnly < today;
+
             // if exam date has passed we clear urgent status
             if (diffDays < 0 && reqObj.urgent) {
                 // optional: clear urgent in db
                 await Request.findByIdAndUpdate(reqObj._id, { urgent: false });
                 reqObj.urgent = false;
             }
-            // if exam is within 3 days mark urgent
-            if (diffDays >= 0 && diffDays <= 3 && !reqObj.urgent) {
+            // if exam is within 3 days mark urgent (only for active requests)
+            if (diffDays >= 0 && diffDays <= 3 && !reqObj.urgent && !isPastRequest) {
                 await Request.findByIdAndUpdate(reqObj._id, { urgent: true });
                 reqObj.urgent = true;
             }
 
+            reqObj.isPastRequest = isPastRequest;
             return reqObj;
         }));
 
-        // 3. Education/Subject Matching (Soft Filter / AI Matching Score)
-        // We add a 'matchScore' to prioritize relevant requests
-        // Keywords: Check if request subject or student course matches volunteer subjects
-
-        requests = requests.map(request => {
-            let score = 0;
-            const reasons = [];
-
-            // Base score for location match (already filtered)
-            score += 50;
-
-            // Subject Matching
-            // Simple keyword matching
-            if (volunteer.subjects && volunteer.subjects.length > 0) {
-                const requestSubject = request.subject.toLowerCase();
-                const studentCourse = request.studentId.course.toLowerCase();
-
-                const hasMatch = volunteer.subjects.some(sub => {
-                    const s = sub.toLowerCase();
-                    return requestSubject.includes(s) || s.includes(requestSubject) ||
-                        studentCourse.includes(s) || s.includes(studentCourse);
-                });
-
-                if (hasMatch) {
-                    score += 30;
-                    reasons.push('Subject match');
-                }
+        // 4. Separate active and past requests
+        allRequests.forEach(request => {
+            if (request.isPastRequest) {
+                pastRequests.push(request);
             } else {
-                // If volunteer has no specific subjects, assume they are open to general requests
-                score += 10;
+                activeRequests.push(request);
             }
-
-            // Language Matching (if request had language, currently Student has preferredLanguage)
-            if (volunteer.languages && volunteer.languages.length > 0) {
-                const studentLang = request.studentId.preferredLanguage || "";
-                if (volunteer.languages.some(l => l.toLowerCase() === studentLang.toLowerCase())) {
-                    score += 20;
-                    reasons.push('Language match');
-                }
-            }
-
-            return { ...request, matchScore: score, matchReasons: reasons };
         });
 
-        // Sort by Match Score
-        requests.sort((a, b) => b.matchScore - a.matchScore);
+        // 5. Scribe Eligibility Filtering (only for active requests)
+        // Only show active requests where volunteer is eligible based on education level and subject expertise.
+        // Accepted requests can still be visible if they are marked OPEN.
+        const ScribeEligibilityValidator = require('../utils/scribeEligibilityValidator');
 
-        res.json(requests);
+        const filteredActiveRequests = activeRequests.filter(request => {
+            const isAssignedToCurrentVolunteer = request.volunteerId && request.volunteerId.toString() === volunteer._id.toString();
+
+            // Keep own accepted requests in the volunteer's view. Hide already assigned requests unless they are OPEN and not assigned to the current volunteer.
+            if (request.status === 'accepted' && request.volunteerId && !isAssignedToCurrentVolunteer) {
+                return request.visibilityMode === 'OPEN';
+            }
+
+            // Check eligibility for pending requests and any open accepted requests.
+            const eligibility = ScribeEligibilityValidator.validateEligibility(
+                request.studentId,
+                volunteer,
+                request.subject
+            );
+
+            return eligibility.eligible;
+        });
+
+        // 6. Add eligibility status for active requests display
+        const activeRequestsWithEligibility = filteredActiveRequests.map(request => {
+            const eligibilityStatus = ScribeEligibilityValidator.getEligibilityStatus(
+                volunteer,
+                request.studentId,
+                request.subject
+            );
+
+            return {
+                ...request,
+                eligibilityStatus: eligibilityStatus.status,
+                eligibilityMessage: eligibilityStatus.message,
+                canAccept: eligibilityStatus.canSendRequest
+            };
+        });
+
+        // 7. For past requests, just add basic info (no eligibility checking needed)
+        const pastRequestsWithInfo = pastRequests.map(request => ({
+            ...request,
+            eligibilityStatus: 'past',
+            eligibilityMessage: 'This request has expired',
+            canAccept: false
+        }));
+
+        res.json({
+            activeRequests: activeRequestsWithEligibility,
+            pastRequests: pastRequestsWithInfo
+        });
     } catch (error) {
         next(error);
     }
@@ -180,15 +224,69 @@ router.get('/incoming', protect, authorize('volunteer'), async (req, res, next) 
 router.post('/accept/:requestId', protect, authorize('volunteer'), async (req, res, next) => {
     try {
         const volunteer = await Volunteer.findOne({ userId: req.user._id });
-        const request = await Request.findByIdAndUpdate(
-            req.params.requestId,
+        const request = await Request.findById(req.params.requestId)
+            .populate({
+                path: 'studentId',
+                select: 'educationLevel'
+            });
+
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        // Validate eligibility before accepting
+        const eligibilityCheck = ScribeEligibilityValidator.validateRequestAcceptance(
+            volunteer,
+            request.studentId,
+            request.subject
+        );
+
+        if (!eligibilityCheck.canAccept) {
+            return res.status(403).json({
+                message: 'You are not eligible to accept this request',
+                reason: eligibilityCheck.message
+            });
+        }
+
+        // Use atomic update to prevent race conditions
+        const updatedRequest = await Request.findOneAndUpdate(
+            {
+                _id: req.params.requestId,
+                status: 'pending', // Only accept if still pending
+                volunteerId: null // Only accept if not already assigned
+            },
             {
                 volunteerId: volunteer._id,
+                acceptedBy: volunteer._id,
+                acceptedAt: new Date(),
+                visibilityMode: 'PRIVATE',
                 status: 'accepted'
             },
-            { new: true }
-        );
-        res.json(request);
+            {
+                new: true,
+                runValidators: true
+            }
+        ).populate('studentId', 'fullName university phone');
+
+        if (!updatedRequest) {
+            return res.status(409).json({
+                message: 'Request has already been accepted by another volunteer'
+            });
+        }
+
+        // Create chat session for this assignment so the assigned volunteer and student can communicate.
+        const ChatSession = require('../models/ChatSession');
+        const chatSession = await ChatSession.create({
+            requestId: updatedRequest._id,
+            studentId: updatedRequest.studentId._id,
+            volunteerId: volunteer._id,
+            messages: []
+        });
+
+        updatedRequest.chatSessionId = chatSession._id;
+        await updatedRequest.save();
+
+        res.json(updatedRequest);
     } catch (error) {
         next(error);
     }
@@ -236,7 +334,10 @@ router.get('/active', protect, authorize('volunteer'), async (req, res, next) =>
             volunteerId: volunteer._id,
             status: { $in: ['accepted', 'in-progress', 'declined_by_volunteer'] }
         })
-            .populate('studentId', 'fullName university phone profilePicture')
+            .populate({
+                path: 'studentId',
+                select: 'fullName university phone profilePicture'
+            })
             .sort('examDate');
 
         const now = new Date();
@@ -267,9 +368,17 @@ router.get('/history', protect, authorize('volunteer'), async (req, res, next) =
             volunteerId: volunteer._id,
             status: 'completed'
         })
-            .populate('studentId', 'fullName university profilePicture')
+            .populate({
+                path: 'studentId',
+                select: 'fullName university profilePicture'
+            })
             .sort('-createdAt');
-        res.json(history);
+
+        const sanitizedHistory = history.map((entry) => {
+            return entry.toObject();
+        });
+
+        res.json(sanitizedHistory);
     } catch (error) {
         next(error);
     }
@@ -295,7 +404,8 @@ router.get('/stats', protect, authorize('volunteer'), async (req, res, next) => 
         res.json({
             averageRating: volunteer.rating || 0,
             totalReviews: volunteer.totalRatings || 0,
-            completedAssignments: completedCount
+            completedAssignments: completedCount,
+            ignoredRequestsCount: volunteer.ignoredRequestsCount || 0
         });
     } catch (error) {
         next(error);

@@ -13,7 +13,9 @@ router.post('/', protect, async (req, res, next) => {
         const student = await Student.findOne({ userId: req.user._id });
         const payload = {
             studentId: student._id,
-            ...req.body
+            ...req.body,
+            language: student.preferredLanguage,
+            location: `${student.city}, ${student.state}`
         };
         if (payload.examDate) {
             const now = new Date();
@@ -36,17 +38,97 @@ router.post('/', protect, async (req, res, next) => {
 router.get('/:id', protect, async (req, res, next) => {
     try {
         let request = await Request.findById(req.params.id)
-            .populate('studentId', 'fullName university phone')
-            .populate('volunteerId', 'fullName phone rating');
-        if (request && request.examDate) {
-            const now = new Date();
-            const diffDays = Math.ceil((new Date(request.examDate) - now) / (1000 * 60 * 60 * 24));
-            const obj = request.toObject();
-            obj.daysRemaining = diffDays;
-            if (diffDays <= 3 && diffDays >= 0) obj.urgent = true;
-            if (diffDays < 0) obj.urgent = false;
-            request = obj;
+            .populate('studentId', 'fullName university phone city state preferredLanguage')
+            .populate({
+                path: 'volunteerId',
+                select: 'fullName phone rating'
+            });
+        if (request) {
+            const requestObj = request.toObject();
+            requestObj.language = requestObj.language || requestObj.studentId?.preferredLanguage;
+            requestObj.location = requestObj.location || (requestObj.studentId ? `${requestObj.studentId.city}, ${requestObj.studentId.state}` : null);
+            if (requestObj.examDate) {
+                const now = new Date();
+                const diffDays = Math.ceil((new Date(requestObj.examDate) - now) / (1000 * 60 * 60 * 24));
+                requestObj.daysRemaining = diffDays;
+                if (diffDays <= 3 && diffDays >= 0) requestObj.urgent = true;
+                if (diffDays < 0) requestObj.urgent = false;
+            }
+            request = requestObj;
         }
+        res.json(request);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// @desc    Update request visibility mode (student only)
+// @route   PUT /api/v1/requests/:id/visibility
+// @access  Private (Student)
+router.put('/:id/visibility', protect, async (req, res, next) => {
+    try {
+        const { visibilityMode } = req.body;
+        const allowedModes = ['PRIVATE', 'OPEN'];
+
+        if (!allowedModes.includes(visibilityMode)) {
+            return res.status(400).json({ message: 'visibilityMode must be PRIVATE or OPEN' });
+        }
+
+        const student = await Student.findOne({ userId: req.user._id });
+        if (!student) {
+            return res.status(404).json({ message: 'Student profile not found' });
+        }
+
+        const request = await Request.findOne({ _id: req.params.id, studentId: student._id });
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        if (!['accepted', 'in-progress'].includes(request.status)) {
+            return res.status(400).json({ message: 'Visibility mode can only be changed for accepted or in-progress requests' });
+        }
+
+        request.visibilityMode = visibilityMode;
+        await request.save();
+
+        res.json(request);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// @desc    Reassign a request by clearing the current volunteer
+// @route   POST /api/v1/requests/:id/reassign
+// @access  Private (Student)
+router.post('/:id/reassign', protect, async (req, res, next) => {
+    try {
+        const student = await Student.findOne({ userId: req.user._id });
+        if (!student) {
+            return res.status(404).json({ message: 'Student profile not found' });
+        }
+
+        const request = await Request.findOne({ _id: req.params.id, studentId: student._id });
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        if (!request.volunteerId || !['accepted', 'in-progress'].includes(request.status)) {
+            return res.status(400).json({ message: 'Only an active assigned request may be reassigned' });
+        }
+
+        const ChatSession = require('../models/ChatSession');
+        if (request.chatSessionId) {
+            await ChatSession.findByIdAndUpdate(request.chatSessionId, { isActive: false });
+        }
+
+        request.volunteerId = null;
+        request.acceptedBy = null;
+        request.acceptedAt = null;
+        request.chatSessionId = null;
+        request.status = 'pending';
+        request.visibilityMode = 'PRIVATE';
+        await request.save();
+
         res.json(request);
     } catch (error) {
         next(error);
@@ -130,9 +212,21 @@ router.get('/history', protect, async (req, res, next) => {
             studentId: student._id,
             status: { $in: ['completed', 'cancelled_by_student', 'declined_by_volunteer'] }
         })
-            .populate('volunteerId', 'fullName phone rating')
+            .populate({
+                path: 'volunteerId',
+                select: 'fullName phone rating userId',
+                populate: { path: 'userId', select: 'isActive' }
+            })
             .sort('-updatedAt');
-        res.json(history);
+
+        const sanitizedHistory = history.map(entry => {
+            const obj = entry.toObject();
+            obj.language = obj.language || student.preferredLanguage;
+            obj.location = obj.location || `${student.city}, ${student.state}`;
+            return obj;
+        });
+
+        res.json(sanitizedHistory);
     } catch (error) {
         next(error);
     }

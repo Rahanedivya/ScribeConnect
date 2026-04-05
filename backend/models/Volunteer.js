@@ -48,6 +48,24 @@ const volunteerSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    // Education Level
+    educationLevel: {
+        type: String,
+        required: true,
+        enum: ['10th', '12th', 'Diploma', 'BBA', 'BSc', 'BA', 'BTech', 'BE', 'MBA', 'MTech', 'MSc', 'MA', 'PhD'],
+        default: '12th'
+    },
+    // Subject Expertise (for scribe eligibility filtering)
+    subjectExpertise: [{
+        type: String
+    }],
+    // Availability Status
+    availabilityStatus: {
+        type: String,
+        enum: ['available', 'busy', 'unavailable'],
+        default: 'available',
+        index: true
+    },
     // Skills
     subjects: [{
         type: String
@@ -144,6 +162,11 @@ const volunteerSchema = new mongoose.Schema({
     lastMinuteHero: {
         type: Boolean,
         default: false
+    },
+    // Ignored Requests Tracking
+    ignoredRequestsCount: {
+        type: Number,
+        default: 0
     }
 }, {
     timestamps: true

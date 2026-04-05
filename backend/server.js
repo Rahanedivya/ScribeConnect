@@ -5,9 +5,13 @@ const helmet = require('helmet');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
+const BackgroundScheduler = require('./utils/backgroundScheduler');
 
 // Connect to database
 connectDB();
+
+// Initialize background scheduler
+BackgroundScheduler.init();
 
 const app = express();
 
@@ -36,6 +40,7 @@ app.use('/api/v1/auth', require('./routes/auth'));
 app.use('/api/v1/students', require('./routes/students'));
 app.use('/api/v1/volunteers', require('./routes/volunteers'));
 app.use('/api/v1/requests', require('./routes/requests'));
+app.use('/api/v1/chat', require('./routes/chat'));
 app.use('/api/v1/notifications', require('./routes/notifications'));
 app.use('/api/v1/last-minute', require('./routes/lastMinute'));
 app.use('/api/v1/matching', require('./routes/matching')); // AI-powered matching engine
@@ -78,4 +83,6 @@ app.listen(PORT, () => {
     console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
     // Start the no-show detection scheduler
     scheduleNoShowDetection();
+    // Start the background scheduler for reactivation and ignored requests
+    BackgroundScheduler.init();
 });

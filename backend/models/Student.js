@@ -58,6 +58,17 @@ const studentSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    educationLevel: {
+        type: String,
+        required: true,
+        enum: ['10th', '12th', 'Diploma', 'BBA', 'BSc', 'BA', 'BTech', 'BE', 'MBA', 'MTech', 'MSc', 'MA', 'PhD'],
+        default: '12th'
+    },
+    stream: {
+        type: String,
+        default: null,
+        // Examples: Science, Commerce, Computer Engineering, Mechanical Engineering, etc.
+    },
     examFrequency: {
         type: String,
         required: true,

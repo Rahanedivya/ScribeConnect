@@ -52,18 +52,15 @@ const handleVolunteerNoShow = async (volunteerId) => {
             volunteer.rating = Math.max(0, volunteer.rating - punishment.ratingPenalty);
         }
 
-        // Apply suspension or ban
+        // Apply suspension or ban (without deactivating accounts - deactivation feature removed)
         if (punishment.permanentBan) {
-            // Permanent ban
-            volunteer.userId.isActive = false;
-            await volunteer.userId.save();
+            // Permanent ban - tracked but account remains active
+            volunteer.suspensionEndDate = new Date(2099, 0, 1); // Far future date
         } else if (punishment.suspensionDays > 0) {
-            // Temporary suspension
+            // Temporary suspension - tracked but account remains active
             const suspensionEndDate = new Date();
             suspensionEndDate.setDate(suspensionEndDate.getDate() + punishment.suspensionDays);
             volunteer.suspensionEndDate = suspensionEndDate;
-            volunteer.userId.isActive = false;
-            await volunteer.userId.save();
         }
 
         await volunteer.save();
@@ -127,37 +124,9 @@ const createNoShowNotification = async (volunteer, punishment) => {
  * @returns {boolean} - Whether the account was reactivated
  */
 const checkAndReactivateVolunteer = async (volunteerId) => {
-    try {
-        const volunteer = await Volunteer.findById(volunteerId).populate('userId');
-        if (!volunteer || !volunteer.suspensionEndDate) {
-            return false;
-        }
-
-        const now = new Date();
-        if (now >= volunteer.suspensionEndDate && !volunteer.userId.isActive) {
-            volunteer.userId.isActive = true;
-            volunteer.suspensionEndDate = null;
-            await volunteer.userId.save();
-            await volunteer.save();
-
-            // Create reactivation notification
-            await Notification.create({
-                userId: volunteer.userId._id,
-                type: 'info',
-                title: 'Account Reactivated',
-                message: 'Your account suspension has ended. You may now accept new requests.',
-                isRead: false
-            });
-
-            return true;
-        }
-
-        return false;
-
-    } catch (error) {
-        console.error('Error checking volunteer reactivation:', error);
-        return false;
-    }
+    // Deactivation feature removed - all volunteers remain active
+    // Function retained for backward compatibility but does nothing
+    return false;
 };
 
 /**

@@ -90,10 +90,6 @@ const login = async (req, res, next) => {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
 
-        if (!user.isActive) {
-            return res.status(401).json({ message: 'Account is deactivated' });
-        }
-
         // Update last login
         user.lastLogin = Date.now();
         await user.save();

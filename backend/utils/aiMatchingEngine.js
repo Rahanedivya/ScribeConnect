@@ -7,6 +7,7 @@
 const Volunteer = require('../models/Volunteer');
 const Request = require('../models/Request');
 const Student = require('../models/Student');
+const ScribeEligibilityValidator = require('./scribeEligibilityValidator');
 
 class AIMatchingEngine {
     /**
@@ -14,9 +15,10 @@ class AIMatchingEngine {
      * @param {Object} requestData - Request details (subject, examDate, examTime, city, disabilityType)
      * @param {String} studentCity - Student's city
      * @param {String} studentDisability - Student's disability type
+     * @param {Object} student - Student object for eligibility validation
      * @returns {Promise<Array>} Ranked list of volunteers with scores
      */
-    static async getSmartMatches(requestData, studentCity, studentDisability) {
+    static async getSmartMatches(requestData, studentCity, studentDisability, student = null) {
         try {
             const { subject, examDate, examTime, duration } = requestData;
 
@@ -38,8 +40,24 @@ class AIMatchingEngine {
                 )
             );
 
+            // Apply scribe eligibility validation if student data is available
+            let eligibleVolunteers = scoredVolunteers;
+            if (student) {
+                eligibleVolunteers = scoredVolunteers.filter(vol => {
+                    const volunteer = candidateVolunteers.find(v => v._id.toString() === vol._id.toString());
+                    if (!volunteer) return false;
+
+                    const validation = ScribeEligibilityValidator.validateEligibility(student, volunteer, subject);
+                    vol.eligibilityStatus = validation.status || (validation.eligible ? 'Eligible' : 'Not Eligible');
+                    vol.eligibilityReason = validation.reason;
+                    vol.eligibilityDetails = validation.details;
+
+                    return validation.eligible;
+                });
+            }
+
             // Sort by score (highest first) and filter out zero scores
-            const rankedVolunteers = scoredVolunteers
+            const rankedVolunteers = eligibleVolunteers
                 .filter(v => v.totalScore > 0)
                 .sort((a, b) => b.totalScore - a.totalScore);
 
@@ -290,8 +308,8 @@ class AIMatchingEngine {
      * Get recommended volunteer from top matches
      * Can be used for automatic allocation
      */
-    static async getRecommendedVolunteer(requestData, studentCity, studentDisability) {
-        const matches = await this.getSmartMatches(requestData, studentCity, studentDisability);
+    static async getRecommendedVolunteer(requestData, studentCity, studentDisability, student = null) {
+        const matches = await this.getSmartMatches(requestData, studentCity, studentDisability, student);
 
         if (matches.length === 0) {
             return null;
@@ -305,8 +323,8 @@ class AIMatchingEngine {
      * Get multiple recommendations (top 5)
      * Useful for presenting options to student
      */
-    static async getTopRecommendations(requestData, studentCity, studentDisability, limit = 5) {
-        const matches = await this.getSmartMatches(requestData, studentCity, studentDisability);
+    static async getTopRecommendations(requestData, studentCity, studentDisability, limit = 5, student = null) {
+        const matches = await this.getSmartMatches(requestData, studentCity, studentDisability, student);
         return matches.slice(0, limit);
     }
 

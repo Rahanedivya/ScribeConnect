@@ -1,7 +1,5 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const Volunteer = require('../models/Volunteer');
-const { checkAndReactivateVolunteer } = require('../utils/punishmentSystem');
 
 const protect = async (req, res, next) => {
     let token;
@@ -19,29 +17,6 @@ const protect = async (req, res, next) => {
 
             if (!req.user) {
                 return res.status(401).json({ message: 'User not found' });
-            }
-
-            if (!req.user.isActive) {
-                return res.status(401).json({ message: 'Account is deactivated' });
-            }
-
-            // Check if volunteer is suspended and potentially reactivate
-            if (req.user.role === 'volunteer') {
-                const volunteer = await Volunteer.findOne({ userId: req.user._id });
-                if (volunteer) {
-                    // Check if suspension has ended
-                    await checkAndReactivateVolunteer(volunteer._id);
-
-                    // Re-fetch user to check if reactivated
-                    req.user = await User.findById(decoded.id).select('-password');
-
-                    if (!req.user.isActive) {
-                        const suspensionMessage = volunteer.suspensionEndDate
-                            ? `Account is suspended until ${volunteer.suspensionEndDate.toDateString()}`
-                            : 'Account is deactivated';
-                        return res.status(401).json({ message: suspensionMessage });
-                    }
-                }
             }
 
             next();

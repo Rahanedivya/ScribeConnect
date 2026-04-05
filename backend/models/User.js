@@ -23,10 +23,6 @@ const userSchema = new mongoose.Schema({
         enum: ['student', 'volunteer', 'admin'],
         required: true
     },
-    isActive: {
-        type: Boolean,
-        default: true
-    },
     lastLogin: {
         type: Date
     }

@@ -84,11 +84,33 @@ router.post('/requests', protect, authorize('student'), async (req, res, next) =
             return res.status(404).json({ message: 'Student profile not found' });
         }
 
+        // Validate required fields
+        const { subject, examType, examDate, examTime, duration, requirements } = req.body;
+        
+        if (!subject || !examType || !examDate || !examTime || !duration || !requirements) {
+            return res.status(400).json({ 
+                message: 'Missing required fields: subject, examType, examDate, examTime, duration, requirements' 
+            });
+        }
+
+        // Validate exam date is in the future
+        const examDateTime = new Date(examDate);
+        if (examDateTime < new Date()) {
+            return res.status(400).json({ 
+                message: 'Exam date must be in the future' 
+            });
+        }
+
         // determine if the new request should be marked urgent based on exam date
         const payload = {
             studentId: student._id,
-            ...req.body
+            ...req.body,
+            // Store student's education level with the request for reference
+            student_education_level: student.educationLevel,
+            language: student.preferredLanguage,
+            location: `${student.city}, ${student.state}`
         };
+        
         if (payload.examDate) {
             const now = new Date();
             const exam = new Date(payload.examDate);
@@ -102,7 +124,7 @@ router.post('/requests', protect, authorize('student'), async (req, res, next) =
 
         // Populate the created request
         const populatedRequest = await Request.findById(request._id)
-            .populate('studentId', 'fullName university phone');
+            .populate('studentId', 'fullName university phone educationLevel stream');
 
         res.status(201).json(populatedRequest);
     } catch (error) {
@@ -122,22 +144,50 @@ router.get('/requests', protect, authorize('student'), async (req, res, next) =>
         }
 
         let requests = await Request.find({ studentId: student._id })
-            .populate('volunteerId', 'fullName phone rating')
+            .populate({
+                path: 'volunteerId',
+                select: 'fullName phone rating'
+            })
             .sort('-createdAt');
 
-        const now = new Date();
-        requests = requests.map(r => {
+        const sanitizedRequests = requests.map(r => {
             const obj = r.toObject();
+            obj.language = obj.language || student.preferredLanguage;
+            obj.location = obj.location || `${student.city}, ${student.state}`;
+            return obj;
+        });
+
+        const now = new Date();
+        const categorizedRequests = {
+            active: [],
+            expired: [],
+            completed: [],
+            cancelled: []
+        };
+
+        sanitizedRequests.forEach(obj => {
             if (obj.examDate) {
                 const diffDays = Math.ceil((new Date(obj.examDate) - now) / (1000 * 60 * 60 * 24));
                 obj.daysRemaining = diffDays;
                 if (diffDays <= 3 && diffDays >= 0) obj.urgent = true;
-                if (diffDays < 0) obj.urgent = false;
+                if (diffDays < 0 && obj.status === 'pending') {
+                    obj.status = 'expired'; // Mark as expired for display
+                }
             }
-            return obj;
+
+            // Categorize requests
+            if (obj.status === 'expired' || (obj.status === 'pending' && obj.daysRemaining < 0)) {
+                categorizedRequests.expired.push(obj);
+            } else if (['completed', 'cancelled_by_student', 'declined_by_volunteer'].includes(obj.status)) {
+                categorizedRequests.completed.push(obj);
+            } else if (['cancelled', 'volunteer_no_show'].includes(obj.status)) {
+                categorizedRequests.cancelled.push(obj);
+            } else {
+                categorizedRequests.active.push(obj);
+            }
         });
 
-        res.json(requests);
+        res.json(categorizedRequests);
     } catch (error) {
         console.error('Error fetching student requests:', error);
         next(error);
@@ -154,9 +204,22 @@ router.get('/history', protect, authorize('student'), async (req, res, next) => 
             studentId: student._id,
             status: { $in: ['completed', 'cancelled'] }
         })
-            .populate('volunteerId', 'fullName rating')
+            .populate({
+                path: 'volunteerId',
+                select: 'fullName rating userId',
+                populate: { path: 'userId', select: 'isActive' }
+            })
             .sort('-createdAt');
-        res.json(history);
+
+        const sanitizedHistory = history.map(entry => {
+            const obj = entry.toObject();
+            if (obj.volunteerId && obj.volunteerId.userId && obj.volunteerId.userId.isActive === false) {
+                obj.volunteerId = null;
+            }
+            return obj;
+        });
+
+        res.json(sanitizedHistory);
     } catch (error) {
         next(error);
     }

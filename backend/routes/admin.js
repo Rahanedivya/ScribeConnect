@@ -69,20 +69,6 @@ router.get('/stats', protect, authorize('admin'), async (req, res, next) => {
     }
 });
 
-// @desc    Toggle user active status
-// @route   PUT /api/v1/admin/users/:id/toggle-status
-// @access  Private (Admin)
-router.put('/users/:id/toggle-status', protect, authorize('admin'), async (req, res, next) => {
-    try {
-        const user = await User.findById(req.params.id);
-        user.isActive = !user.isActive;
-        await user.save();
-        res.json(user);
-    } catch (error) {
-        next(error);
-    }
-});
-
 // @desc    Mark request as volunteer no-show
 // @route   PUT /api/v1/admin/requests/:id/mark-no-show
 // @access  Private (Admin)

@@ -39,13 +39,17 @@ const requestSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'accepted', 'in-progress', 'completed', 'cancelled', 'declined_by_volunteer', 'cancelled_by_student', 'volunteer_no_show'],
+        enum: ['pending', 'accepted', 'in-progress', 'completed', 'cancelled', 'declined_by_volunteer', 'cancelled_by_student', 'volunteer_no_show', 'ignored', 'expired'],
         default: 'pending',
         index: true
     },
     // Cancellation/Decline reason
     declineReason: {
         type: String,
+        default: null
+    },
+    ignoredAt: {
+        type: Date,
         default: null
     },
     // Request Type
@@ -86,7 +90,36 @@ const requestSchema = new mongoose.Schema({
     // Reference materials
     materials: [{
         type: String
-    }]
+    }],
+    language: {
+        type: String,
+        default: null
+    },
+    location: {
+        type: String,
+        default: null
+    },
+    acceptedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Volunteer',
+        default: null,
+        index: true
+    },
+    acceptedAt: {
+        type: Date,
+        default: null
+    },
+    visibilityMode: {
+        type: String,
+        enum: ['PRIVATE', 'OPEN'],
+        default: 'PRIVATE',
+        index: true
+    },
+    chatSessionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ChatSession',
+        default: null
+    }
 }, {
     timestamps: true
 });
@@ -95,6 +128,8 @@ const requestSchema = new mongoose.Schema({
 requestSchema.index({ status: 1, examDate: 1 });
 requestSchema.index({ studentId: 1, status: 1 });
 requestSchema.index({ volunteerId: 1, status: 1 });
+requestSchema.index({ acceptedBy: 1 });
+requestSchema.index({ visibilityMode: 1 });
 
 // virtual field for days remaining until examDate
 requestSchema.virtual('daysRemaining').get(function() {
